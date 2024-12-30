@@ -552,3 +552,72 @@ class BiLSTM_classification(nn.Module):
         lstm_out, _ = self.bilstm(x)  # [batch_size, seq_length, hidden_size * 2]
         logits = self.fc(lstm_out).mean(dim=1)
         return logits
+
+
+class VideoTextClassifier2(nn.Module):
+    def __init__(self, video_dim, text_dim, hidden_dim, num_heads, num_classes, attention_type):
+        super(VideoTextClassifier2, self).__init__()
+        self.video_model = ModifiedR3D()
+        self.text_model = BiLSTM(embedding_dim=300, hidden_size=hidden_dim, num_layers=2)
+        self.mfcc_model = BiLSTM(embedding_dim=300, hidden_size=hidden_dim, num_layers=2)
+        if attention_type == 'multihead':
+            self.attention = MultiHeadAttention(feature_dim=hidden_dim * 2, num_heads=num_heads)
+            self.fc = nn.Sequential(
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, num_classes)
+            )
+        else:
+            self.attention = ScaledDotProductAttention(feature_dim=hidden_dim * 2)
+            self.fc = nn.Sequential(
+                nn.Linear(200, 100),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(100, num_classes)
+            )
+        # Linear layers to map to common space
+        self.video_proj = nn.Linear(2, hidden_dim * 2)
+        self.text_proj = nn.Linear(hidden_dim * 2, hidden_dim * 2)
+        self.mfcc_proj = nn.Linear(hidden_dim * 2, hidden_dim * 2)
+        # Final classifier
+        
+        self.atten_type = attention_type
+
+    def forward(self, video_tensor, embed_sent, mfcc):
+        # Video features
+        video_tensor = video_tensor.permute(0, 2, 1, 3, 4)  # [batch_size, channels, frames, height, width]
+        video_features = self.video_model(video_tensor)  # [batch_size, frames, feature_dim, h, w]
+        video_features = video_features.mean(dim=[3, 4])  # [batch_size, frames, feature_dim]
+
+        video_features = self.video_proj(video_features.mean(dim=0))  # [batch_size, hidden_dim * 2]
+
+        # Text features
+        embed_sent = embed_sent.unsqueeze(1)  # [batch_size, 1, embed_dim]
+        text_features = self.text_model(embed_sent)  # [batch_size, hidden_dim * 2]
+        text_features = self.text_proj(text_features)  # [batch_size, hidden_dim * 2]
+
+        # MFCC features
+        mfcc = mfcc.unsqueeze(1)
+        mfcc_features = self.mfcc_model(mfcc)
+        mfcc_features = self.mfcc_proj(mfcc_features)
+        # Attention
+        # print(video_features.unsqueeze(1).shape)
+        # print(text_features.unsqueeze(1).shape)
+        
+        if self.atten_type == 'multihead':
+
+            fused_features = self.attention(video_features, text_features.unsqueeze(1), text_features.unsqueeze(1))
+            fused_features = fused_features.mean(dim=1, keepdim=False)
+        else:
+            attended_text, _ = self.attention(video_features, text_features.unsqueeze(1), text_features.unsqueeze(1))
+            attended_mfcc, _ = self.attention(video_features, mfcc_features.unsqueeze(1), mfcc_features.unsqueeze(1))
+            attended_fused, _ = self.attention(attended_text, attended_mfcc, attended_mfcc)
+
+            # fused_features = torch.cat([attended_text, attended_mfcc], dim=-1)  # [batch_size, hidden_dim * 2]
+            attended_fused = attended_fused.mean(dim=1) 
+        
+        # Classification
+        logits = self.fc(attended_fused)  # [batch_size, num_classes]
+        return logits
+    

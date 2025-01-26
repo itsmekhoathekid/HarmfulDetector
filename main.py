@@ -1,4 +1,4 @@
-from models.models import CustomModel, ResNet3DModel, DenseNet3D, R2Plus1DModel, ResNet, BasicBlock, VideoClassifier
+from models.models import CustomModel, ResNet3DModel, DenseNet3D, R2Plus1DModel, ResNet, BasicBlock, BiLSTM_classification
 from data_utils.utils import JSONDataset
 from torch.utils.data import DataLoader
 import torch
@@ -9,7 +9,7 @@ from tqdm import tqdm
 n_frames = 10  # Number of frames per video
 output_size = (224, 224)  # Frame dimensions
 frame_step = 15  # Frames to skip between samples
-batch_size = 1
+batch_size = 4
 
 json_paths = {
     "train" : r"C:\Users\VIET HOANG - VTS\Desktop\VisionReader\HarmfulDetector\train.json",
@@ -65,13 +65,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #     compress_factor=0.5,
 #     num_classes=5  # Số nhãn
 # ).to(device)
-model = R2Plus1DModel(num_classes=5).to(device)
+# model = ResNet3DModel(num_classes=5).to(device)
 # model = ResNet(
 #     block=BasicBlock,  # Khối cơ bản của ResNet
 #     layers=[2, 2, 2, 2],  # ResNet-18
 #     block_inplanes=get_inplanes()  # Số nhãn (thay đổi theo dữ liệu của bạn)
 # ).to(device)
-model = VideoClassifier(num_classes=5).to(device)
+
+# model = VideoClassifier(num_classes=5).to(device)
+model = BiLSTM_classification(300, 150, 2, 5).to(device)
 loss_fn = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
@@ -81,13 +83,9 @@ for epoch in range(10):
     progress_bar = tqdm(train_data, desc=f"Epoch {epoch+1} Training", leave=True)
     for batch in progress_bar:
         video_frames, sen_embed, spec_frames, labels = batch
-        print(video_frames)
-        print(sen_embed)
-        print(spec_frames)
-        print(labels)
         video_frames, sen_embed, spec_frames, labels = video_frames.to(device), sen_embed.to(device), spec_frames.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = model(video_frames, sen_embed)
+        outputs = model(sen_embed)
         loss = loss_fn(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -99,8 +97,8 @@ for epoch in range(10):
         total, correct = 0, 0
         for batch in tqdm(val_data, desc="evaluating"):
             video_frames, texts, spec_frames, labels = batch
-            video_frames, spec_frames, labels = video_frames.to(device), spec_frames.to(device), labels.to(device)
-            outputs = model(video_frames)
+            video_frames, sen_embed, spec_frames, labels = video_frames.to(device), sen_embed.to(device), spec_frames.to(device), labels.to(device)
+            outputs = model(video_frames, sen_embed)
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
